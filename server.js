@@ -1,4 +1,4 @@
-// server.js (CommonJS)
+// server.js (Secure & Robust Version)
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
@@ -9,7 +9,6 @@ const crypto = require("crypto");
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-// CORS (allow your frontend origin)
 app.use(
   cors({
     origin: "*",
@@ -21,19 +20,15 @@ app.use(
 app.options("*", cors());
 
 // ---------- MongoDB ----------
-const MONGO_URI =
-  process.env.MONGO_URI ||
-  "mongodb+srv://krishnasastry99:J12rfhtgXDzyBj2B@cluster0.zownxzc.mongodb.net/tanuku_run?retryWrites=true&w=majority&appName=Cluster0";
-
 mongoose
-  .connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => {
     console.error("❌ MongoDB connect error:", err);
     process.exit(1);
   });
 
-// ---------- Model ----------
+// ---------- Schemas ----------
 const registrationSchema = new mongoose.Schema({
   runType: String,
   name: String,
@@ -44,24 +39,25 @@ const registrationSchema = new mongoose.Schema({
   city: String,
   bloodGroup: String,
   tshirtSize: String,
-  amount: Number, // in paise
+  amount: Number,
   paymentId: String,
   orderId: String,
   signature: String,
+  status: { type: String, enum: ["PENDING", "PAID", "FAILED", "CANCELLED"], default: "PENDING" },
   createdAt: { type: Date, default: Date.now },
 });
 const Registration = mongoose.model("Registration", registrationSchema);
 
 // ---------- Razorpay ----------
-const RAZORPAY_KEY_ID = "rzp_test_E88wJ7EdIC51XD";
-const RAZORPAY_KEY_SECRET = "1JtTw4DsO4kjGReBA7078ShY";
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
 
 const razorpay = new Razorpay({
   key_id: RAZORPAY_KEY_ID,
   key_secret: RAZORPAY_KEY_SECRET,
 });
 
-// ---------- Price mapping (server authoritative) ----------
+// ---------- Price mapping ----------
 const priceMappingRupees = {
   "3K": 150,
   "5K": 300,
@@ -69,21 +65,17 @@ const priceMappingRupees = {
 };
 
 // ---------- Routes ----------
-// Health check
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// Create order: frontend sends { raceType }
+// Create Razorpay order
 app.post("/api/create-order", async (req, res) => {
   try {
     const { raceType } = req.body;
     if (!raceType || !priceMappingRupees[raceType]) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Invalid raceType" });
+      return res.status(400).json({ success: false, error: "Invalid raceType" });
     }
 
     const amountInPaise = priceMappingRupees[raceType] * 100;
-
     const options = {
       amount: amountInPaise,
       currency: "INR",
@@ -92,6 +84,15 @@ app.post("/api/create-order", async (req, res) => {
     };
 
     const order = await razorpay.orders.create(options);
+
+    // Save order in MongoDB with PENDING status
+    const registration = new Registration({
+      runType: raceType,
+      orderId: order.id,
+      amount: amountInPaise,
+      status: "PENDING",
+    });
+    await registration.save();
 
     return res.json({
       success: true,
@@ -102,25 +103,11 @@ app.post("/api/create-order", async (req, res) => {
     });
   } catch (err) {
     console.error("create-order error:", err);
-    return res
-      .status(500)
-      .json({ success: false, error: "Server error creating order" });
+    return res.status(500).json({ success: false, error: "Server error creating order" });
   }
 });
 
-/*
-  Register endpoint:
-  Expects JSON with at least:
-  {
-    runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize,
-    paymentId, orderId, signature
-  }
-
-  Steps:
-   - Verify signature using razorpay secret
-   - (Optional) Fetch order/payment from Razorpay to confirm amounts/status
-   - Save registration to MongoDB
-*/
+// Register after payment verification
 app.post("/api/register", async (req, res) => {
   try {
     const {
@@ -139,97 +126,93 @@ app.post("/api/register", async (req, res) => {
     } = req.body;
 
     if (!orderId || !paymentId || !signature) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Missing payment information" });
+      return res.status(400).json({ success: false, error: "Missing payment information" });
     }
 
-    // 1) Verify signature
+    // Fetch registration/order from DB
+    const registration = await Registration.findOne({ orderId });
+    if (!registration) {
+      return res.status(400).json({ success: false, error: "Order not found" });
+    }
+
+    // Prevent duplicate payment registration
+    if (registration.status === "PAID") {
+      return res.status(409).json({ success: false, error: "Already registered for this order" });
+    }
+
+    // Verify signature
     const generatedSignature = crypto
       .createHmac("sha256", RAZORPAY_KEY_SECRET)
       .update(orderId + "|" + paymentId)
       .digest("hex");
 
     if (generatedSignature !== signature) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Invalid signature" });
+      registration.status = "FAILED";
+      await registration.save();
+      return res.status(400).json({ success: false, error: "Invalid payment signature" });
     }
 
-    // 2) Optional: fetch order & payment to double-check amount and status
-    // Fetch order
-    const order = await razorpay.orders.fetch(orderId).catch((err) => {
-      console.warn("Could not fetch order from Razorpay:", err && err.message);
-      return null;
-    });
+    // Verify order details from Razorpay
+    const order = await razorpay.orders.fetch(orderId);
+    if (!order) return res.status(400).json({ success: false, error: "Order not found in Razorpay" });
 
-    // Fetch payment
-    const payment = await razorpay.payments.fetch(paymentId).catch((err) => {
-      console.warn(
-        "Could not fetch payment from Razorpay:",
-        err && err.message
-      );
-      return null;
-    });
-
-    // Confirm payment captured and amount matches server-side mapping
-    const expectedAmount = priceMappingRupees[runType]
-      ? priceMappingRupees[runType] * 100
-      : null;
-    if (expectedAmount === null) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Invalid runType for verification" });
+    const expectedAmount = priceMappingRupees[runType] * 100;
+    if (Number(order.amount) !== expectedAmount) {
+      registration.status = "FAILED";
+      await registration.save();
+      return res.status(400).json({ success: false, error: "Order amount mismatch" });
     }
 
-    if (order && Number(order.amount) !== Number(expectedAmount)) {
-      console.warn("Order amount mismatch", {
-        orderAmount: order.amount,
-        expectedAmount,
-      });
-      return res
-        .status(400)
-        .json({ success: false, error: "Order amount mismatch" });
+    // Verify payment
+    const payment = await razorpay.payments.fetch(paymentId);
+    if (!payment || payment.status !== "captured" || payment.order_id !== orderId) {
+      registration.status = "FAILED";
+      await registration.save();
+      return res.status(400).json({ success: false, error: "Payment not completed or mismatched" });
     }
 
-    if (payment && payment.status !== "captured") {
-      console.warn("Payment status not captured:", payment && payment.status);
-      // Note: in some test scenarios status may be 'authorized' then later 'captured'
-      // We require 'captured' here to save registration
-      return res
-        .status(400)
-        .json({ success: false, error: "Payment not captured" });
-    }
+    // Save full registration
+    registration.name = name;
+    registration.email = email;
+    registration.phone = phone;
+    registration.age = age;
+    registration.gender = gender;
+    registration.city = city;
+    registration.bloodGroup = bloodGroup;
+    registration.tshirtSize = tshirtSize;
+    registration.paymentId = paymentId;
+    registration.signature = signature;
+    registration.status = "PAID";
 
-    // 3) Persist registration
-    const reg = new Registration({
-      runType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-      amount: expectedAmount, // paise
-      paymentId,
-      orderId,
-      signature,
-    });
+    await registration.save();
 
-    await reg.save();
-
-    return res.json({ success: true, id: reg._id });
+    return res.json({ success: true, id: registration._id });
   } catch (err) {
     console.error("register error:", err);
-    return res
-      .status(500)
-      .json({ success: false, error: "Server error saving registration" });
+    return res.status(500).json({ success: false, error: "Server error saving registration" });
   }
 });
 
-// Admin: get all registrations (for testing)
+// Cancel pending order (for Go Back / abandoned payment)
+app.post("/api/cancel-order", async (req, res) => {
+  try {
+    const { orderId } = req.body;
+    const registration = await Registration.findOne({ orderId });
+    if (!registration || registration.status !== "PENDING") {
+      return res.status(400).json({ success: false, error: "Order cannot be cancelled" });
+    }
+
+    registration.status = "CANCELLED";
+    await registration.save();
+
+    return res.json({ success: true, message: "Order cancelled successfully" });
+  } catch (err) {
+    console.error("cancel-order error:", err);
+    return res.status(500).json({ success: false, error: "Failed to cancel order" });
+  }
+});
+
+// Fetch all registrations
 app.get("/api/registrations", async (req, res) => {
   try {
     const regs = await Registration.find().sort({ createdAt: -1 }).lean();
@@ -240,8 +223,6 @@ app.get("/api/registrations", async (req, res) => {
   }
 });
 
-// Start
+// Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () =>
-  console.log(`🚀 Server running at http://localhost:${PORT}`)
-);
+app.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
