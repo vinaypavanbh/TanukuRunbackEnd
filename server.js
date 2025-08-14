@@ -9,10 +9,10 @@ const app = express();
 app.use(express.json());
 app.use(cors({ origin: "*" }));
 
-// Connect MongoDB
+// MongoDB Connection
 mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("MongoDB connected"))
-  .catch(err => console.error(err));
+  .catch((err) => console.error("MongoDB connection error:", err));
 
 // User Schema
 const userSchema = new mongoose.Schema({
@@ -28,7 +28,7 @@ const userSchema = new mongoose.Schema({
   paymentId: String,
   orderId: String,
   signature: String,
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
 });
 
 const User = mongoose.model("User", userSchema);
@@ -39,17 +39,23 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// Health check
-app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok" });
+});
 
-// Create order
+// Create Razorpay order
 app.post("/api/create-order", async (req, res) => {
   try {
     const { raceType } = req.body;
     const priceMapping = { "3K": 250, "5K": 300, "10K": 350 };
-    const amount = priceMapping[raceType] * 100; // amount in paise
+    const price = priceMapping[raceType];
 
-    if (!amount) return res.status(400).json({ success: false, error: "Invalid run type." });
+    if (!price) {
+      return res.status(400).json({ success: false, error: "Invalid run type." });
+    }
+
+    const amount = price * 100; // Razorpay amount in paise
 
     const order = await razorpay.orders.create({
       amount,
@@ -65,38 +71,40 @@ app.post("/api/create-order", async (req, res) => {
       key: process.env.RAZORPAY_KEY_ID,
     });
   } catch (err) {
-    console.error(err);
+    console.error("Create order error:", err);
     res.status(500).json({ success: false, error: "Failed to create order." });
   }
 });
 
-// Register user
+// Register user after payment
 app.post("/api/register", async (req, res) => {
   try {
     const { runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize, paymentId, orderId, signature } = req.body;
 
     // Backend validation
-    if (!runType || !name || !email || !phone || !age || !gender || !city || !bloodGroup || !tshirtSize)
+    if (!runType || !name || !email || !phone || !age || !gender || !city || !bloodGroup || !tshirtSize) {
       return res.status(400).json({ success: false, error: "All fields are required." });
-
+    }
     if (!/^\d{10}$/.test(phone)) return res.status(400).json({ success: false, error: "Invalid phone number." });
     if (!/^\d{1,3}$/.test(String(age))) return res.status(400).json({ success: false, error: "Invalid age." });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, error: "Invalid email." });
 
-    // Verify payment signature
+    // Verify Razorpay payment signature
     const hmac = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET);
-    hmac.update(orderId + "|" + paymentId);
+    hmac.update(`${orderId}|${paymentId}`);
     const generatedSignature = hmac.digest("hex");
 
-    if (generatedSignature !== signature)
+    if (generatedSignature !== signature) {
       return res.status(400).json({ success: false, error: "Payment verification failed." });
+    }
 
+    // Save user
     const newUser = new User({ runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize, paymentId, orderId, signature });
     await newUser.save();
 
     res.json({ success: true, message: "User registered successfully." });
   } catch (err) {
-    console.error(err);
+    console.error("Registration error:", err);
     res.status(500).json({ success: false, error: "Registration failed." });
   }
 });
