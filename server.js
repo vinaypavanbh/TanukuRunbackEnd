@@ -65,7 +65,7 @@ const razorpay = new Razorpay({
 });
 
 // ---------- Price mapping ----------
-const priceMappingRupees = { "3K": 150, "5K": 300, "10K": 350 };
+const priceMappingRupees = { "3K": 250, "5K": 300, "10K": 350 };
 
 // ---------- Routes ----------
 
