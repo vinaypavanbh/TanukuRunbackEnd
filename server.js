@@ -120,7 +120,67 @@ app.post("/api/create-order", async (req, res) => {
   }
 });
 
-// Resume pending order
+// Resume pending order// Create order & save pending with detailed logging
+app.post("/api/create-order", async (req, res) => {
+  try {
+    const { raceType, name, email, phone, age, gender, city, bloodGroup, tshirtSize } = req.body;
+    console.log("Received /create-order request body:", req.body);
+
+    // Validate raceType
+    if (!raceType || !priceMappingRupees[raceType]) {
+      console.error("Invalid raceType:", raceType);
+      return res.status(400).json({ success: false, error: "Invalid raceType" });
+    }
+
+    const amountInPaise = priceMappingRupees[raceType] * 100;
+    console.log("Amount in paise:", amountInPaise);
+
+    // Create Razorpay order
+    let order;
+    try {
+      order = await razorpay.orders.create({
+        amount: amountInPaise,
+        currency: "INR",
+        receipt: `rcpt_${Date.now()}`,
+        payment_capture: 1,
+      });
+      console.log("Razorpay order created successfully:", order);
+    } catch (err) {
+      console.error("Razorpay order creation failed:", err);
+      return res.status(500).json({ success: false, error: "Failed to create Razorpay order", details: err.message });
+    }
+
+    // Save pending order in MongoDB
+    const pending = new PendingOrder({
+      runType: raceType,
+      name, email, phone, age, gender, city, bloodGroup, tshirtSize,
+      amount: amountInPaise,
+      orderId: order.id,
+      key: RAZORPAY_KEY_ID,
+    });
+
+    try {
+      await pending.save();
+      console.log("Pending order saved in DB:", pending);
+    } catch (err) {
+      console.error("Failed to save pending order:", err);
+      return res.status(500).json({ success: false, error: "Failed to save pending order", details: err.message });
+    }
+
+    // Return order details to frontend
+    res.json({
+      success: true,
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      key: RAZORPAY_KEY_ID,
+    });
+  } catch (err) {
+    console.error("Unexpected create-order error:", err);
+    res.status(500).json({ success: false, error: "Server error creating order", details: err.message });
+  }
+});
+
 app.get("/api/resume-order/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
