@@ -199,6 +199,7 @@ app.get("/api/resume-order/:orderId", async (req, res) => {
 });
 
 // Complete registration / payment
+// Complete registration / payment with email notification
 app.post("/api/register", async (req, res) => {
   try {
     const { runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize, paymentId, orderId, signature } = req.body;
@@ -225,13 +226,47 @@ app.post("/api/register", async (req, res) => {
 
     // Save final registration
     const reg = new Registration({
-      runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize,
-      amount: pending.amount, paymentId, orderId, signature
+      runType,
+      name,
+      email,
+      phone,
+      age,
+      gender,
+      city,
+      bloodGroup,
+      tshirtSize,
+      amount: pending.amount,
+      paymentId,
+      orderId,
+      signature
     });
     await reg.save();
 
     // Remove pending
     await PendingOrder.deleteOne({ orderId });
+
+    // --- SEND EMAIL ---
+    const mailOptions = {
+      from: '"Tanuku Road Run 2025" <youremail@gmail.com>', // sender email
+      to: email, // recipient email
+      subject: `Registration Successful - ${runType}`,
+      html: `
+        <h2>Thank you for registering, ${name}!</h2>
+        <p>Your registration for <strong>${runType}</strong> has been confirmed.</p>
+        <p><strong>Amount Paid:</strong> ₹${pending.amount / 100}</p>
+        <p>We look forward to seeing you at Tanuku Road Run 2025!</p>
+        <br/>
+        <p>Regards,<br/>Tanuku Road Run Team</p>
+      `
+    };
+
+    transporter.sendMail(mailOptions, (err, info) => {
+      if (err) {
+        console.error("Email sending failed:", err);
+      } else {
+        console.log("Email sent:", info.response);
+      }
+    });
 
     res.json({ success: true, id: reg._id });
   } catch (err) {
@@ -239,6 +274,7 @@ app.post("/api/register", async (req, res) => {
     res.status(500).json({ success: false, error: "Server error" });
   }
 });
+
 
 // List all registrations
 app.get("/api/registrations", async (_, res) => {
