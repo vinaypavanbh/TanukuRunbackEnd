@@ -30,7 +30,7 @@ const registrationSchema = new mongoose.Schema({
   city: String,
   bloodGroup: String,
   tshirtSize: String,
-  amount: Number, // in paise
+  amount: Number,
   paymentId: String,
   orderId: String,
   signature: String,
@@ -48,7 +48,7 @@ const pendingSchema = new mongoose.Schema({
   city: String,
   bloodGroup: String,
   tshirtSize: String,
-  amount: Number, // in paise
+  amount: Number,
   orderId: String,
   key: String,
   createdAt: { type: Date, default: Date.now },
@@ -65,7 +65,7 @@ const razorpay = new Razorpay({
 });
 
 // ---------- Price mapping ----------
-const priceMappingRupees = { "3K": 150, "5K": 300, "10K": 500 };
+const priceMappingRupees = { "3K": 150, "5K": 300, "10K": 350 };
 
 // ---------- Routes ----------
 
@@ -90,10 +90,17 @@ app.post("/api/create-order", async (req, res) => {
       payment_capture: 1,
     });
 
-    // Save pending order
+    // Save pending order with all user info
     const pending = new PendingOrder({
       runType: raceType,
-      name, email, phone, age, gender, city, bloodGroup, tshirtSize,
+      name,
+      email,
+      phone,
+      age,
+      gender,
+      city,
+      bloodGroup,
+      tshirtSize,
       amount: amountInPaise,
       orderId: order.id,
       key: RAZORPAY_KEY_ID,
@@ -146,6 +153,7 @@ app.post("/api/register", async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid signature." });
     }
 
+    // Optional: verify payment status
     const payment = await razorpay.payments.fetch(paymentId).catch(() => null);
     if (!payment || payment.status !== "captured") {
       return res.status(400).json({ success: false, error: "Payment not captured." });
