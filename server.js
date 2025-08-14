@@ -1,4 +1,3 @@
-// server.js (Secure & Robust Version)
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
@@ -8,221 +7,100 @@ const crypto = require("crypto");
 
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "sessionId"],
-    exposedHeaders: ["sessionId"],
-  })
-);
-app.options("*", cors());
+app.use(cors({ origin: "*" }));
 
-// ---------- MongoDB ----------
-mongoose
-  .connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => {
-    console.error("❌ MongoDB connect error:", err);
-    process.exit(1);
-  });
+// Connect MongoDB
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log("MongoDB connected"))
+  .catch(err => console.error(err));
 
-// ---------- Schemas ----------
-const registrationSchema = new mongoose.Schema({
-  runType: String,
-  name: String,
-  email: String,
-  phone: String,
-  age: Number,
-  gender: String,
-  city: String,
-  bloodGroup: String,
-  tshirtSize: String,
-  amount: Number,
+// User Schema
+const userSchema = new mongoose.Schema({
+  runType: { type: String, required: true },
+  name: { type: String, required: true },
+  email: { type: String, required: true },
+  phone: { type: String, required: true },
+  age: { type: Number, required: true },
+  gender: { type: String, required: true },
+  city: { type: String, required: true },
+  bloodGroup: { type: String, required: true },
+  tshirtSize: { type: String, required: true },
   paymentId: String,
   orderId: String,
   signature: String,
-  status: { type: String, enum: ["PENDING", "PAID", "FAILED", "CANCELLED"], default: "PENDING" },
-  createdAt: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now }
 });
-const Registration = mongoose.model("Registration", registrationSchema);
 
-// ---------- Razorpay ----------
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
+const User = mongoose.model("User", userSchema);
 
+// Razorpay instance
 const razorpay = new Razorpay({
-  key_id: RAZORPAY_KEY_ID,
-  key_secret: RAZORPAY_KEY_SECRET,
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ---------- Price mapping ----------
-const priceMappingRupees = {
-  "3K": 150,
-  "5K": 300,
-  "10K": 350,
-};
+// Health check
+app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
-// ---------- Routes ----------
-app.get("/api/health", (req, res) => res.json({ ok: true }));
-
-// Create Razorpay order
+// Create order
 app.post("/api/create-order", async (req, res) => {
   try {
     const { raceType } = req.body;
-    if (!raceType || !priceMappingRupees[raceType]) {
-      return res.status(400).json({ success: false, error: "Invalid raceType" });
-    }
+    const priceMapping = { "3K": 250, "5K": 300, "10K": 350 };
+    const amount = priceMapping[raceType] * 100; // amount in paise
 
-    const amountInPaise = priceMappingRupees[raceType] * 100;
-    const options = {
-      amount: amountInPaise,
+    if (!amount) return res.status(400).json({ success: false, error: "Invalid run type." });
+
+    const order = await razorpay.orders.create({
+      amount,
       currency: "INR",
-      receipt: `rcpt_${Date.now()}`,
-      payment_capture: 1,
-    };
-
-    const order = await razorpay.orders.create(options);
-
-    // Save order in MongoDB with PENDING status
-    const registration = new Registration({
-      runType: raceType,
-      orderId: order.id,
-      amount: amountInPaise,
-      status: "PENDING",
+      receipt: `receipt_${Date.now()}`,
     });
-    await registration.save();
 
-    return res.json({
+    res.json({
       success: true,
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
-      key: RAZORPAY_KEY_ID,
+      key: process.env.RAZORPAY_KEY_ID,
     });
   } catch (err) {
-    console.error("create-order error:", err);
-    return res.status(500).json({ success: false, error: "Server error creating order" });
+    console.error(err);
+    res.status(500).json({ success: false, error: "Failed to create order." });
   }
 });
 
-// Register after payment verification
+// Register user
 app.post("/api/register", async (req, res) => {
   try {
-    const {
-      runType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-      paymentId,
-      orderId,
-      signature,
-    } = req.body;
+    const { runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize, paymentId, orderId, signature } = req.body;
 
-    if (!orderId || !paymentId || !signature) {
-      return res.status(400).json({ success: false, error: "Missing payment information" });
-    }
+    // Backend validation
+    if (!runType || !name || !email || !phone || !age || !gender || !city || !bloodGroup || !tshirtSize)
+      return res.status(400).json({ success: false, error: "All fields are required." });
 
-    // Fetch registration/order from DB
-    const registration = await Registration.findOne({ orderId });
-    if (!registration) {
-      return res.status(400).json({ success: false, error: "Order not found" });
-    }
+    if (!/^\d{10}$/.test(phone)) return res.status(400).json({ success: false, error: "Invalid phone number." });
+    if (!/^\d{1,3}$/.test(String(age))) return res.status(400).json({ success: false, error: "Invalid age." });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ success: false, error: "Invalid email." });
 
-    // Prevent duplicate payment registration
-    if (registration.status === "PAID") {
-      return res.status(409).json({ success: false, error: "Already registered for this order" });
-    }
+    // Verify payment signature
+    const hmac = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET);
+    hmac.update(orderId + "|" + paymentId);
+    const generatedSignature = hmac.digest("hex");
 
-    // Verify signature
-    const generatedSignature = crypto
-      .createHmac("sha256", RAZORPAY_KEY_SECRET)
-      .update(orderId + "|" + paymentId)
-      .digest("hex");
+    if (generatedSignature !== signature)
+      return res.status(400).json({ success: false, error: "Payment verification failed." });
 
-    if (generatedSignature !== signature) {
-      registration.status = "FAILED";
-      await registration.save();
-      return res.status(400).json({ success: false, error: "Invalid payment signature" });
-    }
+    const newUser = new User({ runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize, paymentId, orderId, signature });
+    await newUser.save();
 
-    // Verify order details from Razorpay
-    const order = await razorpay.orders.fetch(orderId);
-    if (!order) return res.status(400).json({ success: false, error: "Order not found in Razorpay" });
-
-    const expectedAmount = priceMappingRupees[runType] * 100;
-    if (Number(order.amount) !== expectedAmount) {
-      registration.status = "FAILED";
-      await registration.save();
-      return res.status(400).json({ success: false, error: "Order amount mismatch" });
-    }
-
-    // Verify payment
-    const payment = await razorpay.payments.fetch(paymentId);
-    if (!payment || payment.status !== "captured" || payment.order_id !== orderId) {
-      registration.status = "FAILED";
-      await registration.save();
-      return res.status(400).json({ success: false, error: "Payment not completed or mismatched" });
-    }
-
-    // Save full registration
-    registration.name = name;
-    registration.email = email;
-    registration.phone = phone;
-    registration.age = age;
-    registration.gender = gender;
-    registration.city = city;
-    registration.bloodGroup = bloodGroup;
-    registration.tshirtSize = tshirtSize;
-    registration.paymentId = paymentId;
-    registration.signature = signature;
-    registration.status = "PAID";
-
-    await registration.save();
-
-    return res.json({ success: true, id: registration._id });
+    res.json({ success: true, message: "User registered successfully." });
   } catch (err) {
-    console.error("register error:", err);
-    return res.status(500).json({ success: false, error: "Server error saving registration" });
-  }
-});
-
-// Cancel pending order (for Go Back / abandoned payment)
-app.post("/api/cancel-order", async (req, res) => {
-  try {
-    const { orderId } = req.body;
-    const registration = await Registration.findOne({ orderId });
-    if (!registration || registration.status !== "PENDING") {
-      return res.status(400).json({ success: false, error: "Order cannot be cancelled" });
-    }
-
-    registration.status = "CANCELLED";
-    await registration.save();
-
-    return res.json({ success: true, message: "Order cancelled successfully" });
-  } catch (err) {
-    console.error("cancel-order error:", err);
-    return res.status(500).json({ success: false, error: "Failed to cancel order" });
-  }
-});
-
-// Fetch all registrations
-app.get("/api/registrations", async (req, res) => {
-  try {
-    const regs = await Registration.find().sort({ createdAt: -1 }).lean();
-    return res.json({ success: true, data: regs });
-  } catch (err) {
-    console.error("registrations error:", err);
-    return res.status(500).json({ success: false, error: "Server error" });
+    console.error(err);
+    res.status(500).json({ success: false, error: "Registration failed." });
   }
 });
 
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
