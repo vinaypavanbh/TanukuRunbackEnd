@@ -64,8 +64,11 @@ const razorpay = new Razorpay({
   key_secret: RAZORPAY_KEY_SECRET,
 });
 
+
 // ---------- Price mapping ----------
+
 const priceMappingRupees = { "3K": 250, "5K": 300, "10K": 350 };
+
 
 // ---------- Routes ----------
 
@@ -77,11 +80,12 @@ app.post("/api/create-order", async (req, res) => {
   try {
     const { raceType, name, email, phone, age, gender, city, bloodGroup, tshirtSize } = req.body;
 
-    if (!raceType || !priceMappingRupees[raceType]) {
-      return res.status(400).json({ success: false, error: "Invalid raceType" });
-    }
+   if (!raceType || !priceMappingRupees[raceType]) {
+  return res.status(400).json({ success: false, error: "Invalid raceType" });
+}
 
-    const amountInPaise = priceMappingRupees[raceType] * 100;
+const amountInPaise = priceMappingRupees[raceType] * 100;
+
 
     const order = await razorpay.orders.create({
       amount: amountInPaise,
