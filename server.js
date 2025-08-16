@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const nodemailer = require("nodemailer");
 
 const app = express();
 app.use(express.json());
@@ -18,6 +19,15 @@ mongoose
     console.error("❌ MongoDB connect error:", err);
     process.exit(1);
   });
+
+// ---------- Nodemailer (Gmail) ----------
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "youremail@gmail.com", // replace with your Gmail
+    pass: "your-app-password" // use Gmail App Password
+  },
+});
 
 // ---------- Schemas ----------
 const registrationSchema = new mongoose.Schema({
@@ -56,19 +66,16 @@ const pendingSchema = new mongoose.Schema({
 const PendingOrder = mongoose.model("PendingOrder", pendingSchema);
 
 // ---------- Razorpay ----------
-const RAZORPAY_KEY_ID = "rzp_test_E88wJ7EdIC51XD";
-const RAZORPAY_KEY_SECRET = "1JtTw4DsO4kjGReBA7078ShY";
+const RAZORPAY_KEY_ID = "rzp_live_R5uzxh2ODPYjrn";
+const RAZORPAY_KEY_SECRET = "dRVP063bPmjvKQi3wZPiR9T7";
 
 const razorpay = new Razorpay({
   key_id: RAZORPAY_KEY_ID,
   key_secret: RAZORPAY_KEY_SECRET,
 });
 
-
 // ---------- Price mapping ----------
-
 const priceMappingRupees = { "3K": 250, "5K": 300, "10K": 350 };
-
 
 // ---------- Routes ----------
 
@@ -80,12 +87,11 @@ app.post("/api/create-order", async (req, res) => {
   try {
     const { raceType, name, email, phone, age, gender, city, bloodGroup, tshirtSize } = req.body;
 
-   if (!raceType || !priceMappingRupees[raceType]) {
-  return res.status(400).json({ success: false, error: "Invalid raceType" });
-}
+    if (!raceType || !priceMappingRupees[raceType]) {
+      return res.status(400).json({ success: false, error: "Invalid raceType" });
+    }
 
-const amountInPaise = priceMappingRupees[raceType] * 100;
-
+    const amountInPaise = priceMappingRupees[raceType] * 100;
 
     const order = await razorpay.orders.create({
       amount: amountInPaise,
@@ -94,17 +100,9 @@ const amountInPaise = priceMappingRupees[raceType] * 100;
       payment_capture: 1,
     });
 
-    // Save pending order with all user info
     const pending = new PendingOrder({
       runType: raceType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
+      name, email, phone, age, gender, city, bloodGroup, tshirtSize,
       amount: amountInPaise,
       orderId: order.id,
       key: RAZORPAY_KEY_ID,
@@ -124,91 +122,14 @@ const amountInPaise = priceMappingRupees[raceType] * 100;
   }
 });
 
-// Resume pending order// Create order & save pending with detailed logging
-app.post("/api/create-order", async (req, res) => {
-  try {
-    const { raceType, name, email, phone, age, gender, city, bloodGroup, tshirtSize } = req.body;
-    console.log("Received /create-order request body:", req.body);
-
-    // Validate raceType
-    if (!raceType || !priceMappingRupees[raceType]) {
-      console.error("Invalid raceType:", raceType);
-      return res.status(400).json({ success: false, error: "Invalid raceType" });
-    }
-
-    const amountInPaise = priceMappingRupees[raceType] * 100;
-    console.log("Amount in paise:", amountInPaise);
-
-    // Create Razorpay order
-    let order;
-    try {
-      order = await razorpay.orders.create({
-        amount: amountInPaise,
-        currency: "INR",
-        receipt: `rcpt_${Date.now()}`,
-        payment_capture: 1,
-      });
-      console.log("Razorpay order created successfully:", order);
-    } catch (err) {
-      console.error("Razorpay order creation failed:", err);
-      return res.status(500).json({ success: false, error: "Failed to create Razorpay order", details: err.message });
-    }
-
-    // Save pending order in MongoDB
-    const pending = new PendingOrder({
-      runType: raceType,
-      name, email, phone, age, gender, city, bloodGroup, tshirtSize,
-      amount: amountInPaise,
-      orderId: order.id,
-      key: RAZORPAY_KEY_ID,
-    });
-
-    try {
-      await pending.save();
-      console.log("Pending order saved in DB:", pending);
-    } catch (err) {
-      console.error("Failed to save pending order:", err);
-      return res.status(500).json({ success: false, error: "Failed to save pending order", details: err.message });
-    }
-
-    // Return order details to frontend
-    res.json({
-      success: true,
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      key: RAZORPAY_KEY_ID,
-    });
-  } catch (err) {
-    console.error("Unexpected create-order error:", err);
-    res.status(500).json({ success: false, error: "Server error creating order", details: err.message });
-  }
-});
-
-app.get("/api/resume-order/:orderId", async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const pending = await PendingOrder.findOne({ orderId });
-    if (!pending) return res.status(404).json({ success: false, error: "Pending order not found" });
-
-    res.json({ success: true, data: pending });
-  } catch (err) {
-    console.error("resume-order error:", err);
-    res.status(500).json({ success: false, error: "Server error" });
-  }
-});
-
-// Complete registration / payment
-// Complete registration / payment with email notification
+// Complete registration / payment with email
 app.post("/api/register", async (req, res) => {
   try {
     const { runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize, paymentId, orderId, signature } = req.body;
 
-    // Fetch pending order
     const pending = await PendingOrder.findOne({ orderId });
     if (!pending) return res.status(400).json({ success: false, error: "Pending order not found" });
 
-    // Verify Razorpay signature
     const generatedSignature = crypto
       .createHmac("sha256", RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
@@ -218,7 +139,6 @@ app.post("/api/register", async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid signature." });
     }
 
-    // Optional: verify payment status
     const payment = await razorpay.payments.fetch(paymentId).catch(() => null);
     if (!payment || payment.status !== "captured") {
       return res.status(400).json({ success: false, error: "Payment not captured." });
@@ -226,19 +146,8 @@ app.post("/api/register", async (req, res) => {
 
     // Save final registration
     const reg = new Registration({
-      runType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-      amount: pending.amount,
-      paymentId,
-      orderId,
-      signature
+      runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize,
+      amount: pending.amount, paymentId, orderId, signature
     });
     await reg.save();
 
@@ -247,8 +156,8 @@ app.post("/api/register", async (req, res) => {
 
     // --- SEND EMAIL ---
     const mailOptions = {
-      from: '"Tanuku Road Run 2025" <youremail@gmail.com>', // sender email
-      to: email, // recipient email
+      from: '"Tanuku Road Run 2025" <youremail@gmail.com>',
+      to: email,
       subject: `Registration Successful - ${runType}`,
       html: `
         <h2>Thank you for registering, ${name}!</h2>
@@ -261,20 +170,17 @@ app.post("/api/register", async (req, res) => {
     };
 
     transporter.sendMail(mailOptions, (err, info) => {
-      if (err) {
-        console.error("Email sending failed:", err);
-      } else {
-        console.log("Email sent:", info.response);
-      }
+      if (err) console.error("Email sending failed:", err);
+      else console.log("Email sent:", info.response);
     });
 
     res.json({ success: true, id: reg._id });
+
   } catch (err) {
     console.error("register error:", err);
     res.status(500).json({ success: false, error: "Server error" });
   }
 });
-
 
 // List all registrations
 app.get("/api/registrations", async (_, res) => {
