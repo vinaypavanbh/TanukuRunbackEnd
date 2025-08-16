@@ -1,5 +1,4 @@
 // server.js
-require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -11,298 +10,164 @@ const helmet = require("helmet");
 
 const app = express();
 
-/* =========================
-   ENV REQUIRED (.env sample)
-   =========================
-MONGO_URI=mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/tanuku_run
-RAZORPAY_KEY_ID=rzp_test_xxx
-RAZORPAY_KEY_SECRET=xxxxxxxx
-SMTP_FROM_NAME=Tanuku Road Run 2025
-SMTP_FROM_EMAIL=youremail@gmail.com
-SMTP_PASS=your-gmail-app-password
-ADMIN_EMAIL=youremail@gmail.com
-PORT=5000
-ALLOW_ORIGINS=https://your-frontend-domain.com,http://localhost:5173
-*/
+// ================== CONFIG (hardcoded instead of .env) ==================
+const MONGO_URI =
+  "mongodb+srv://krishnasastry99:J12rfhtgXDzyBj2B@cluster0.zownxzc.mongodb.net/tanuku_run?retryWrites=true&w=majority";
+const RAZORPAY_KEY_ID = "rzp_live_R5uzxh2ODPYjrn";
+const RAZORPAY_KEY_SECRET = "dRVP063bPmjvKQi3wZPiR9T7";
+const SMTP_FROM_NAME = "Tanuku Road Run 2025";
+const SMTP_FROM_EMAIL = "youremail@gmail.com"; // 👈 replace with Gmail
+const SMTP_PASS = "your-gmail-app-password"; // 👈 replace with Gmail App password
+const ADMIN_EMAIL = "youremail@gmail.com";
+const PORT = 5000;
+const ALLOW_ORIGINS =
+  "http://localhost:5173,https://your-frontend-domain.com";
 
-const {
-  MONGO_URI,
-  RAZORPAY_KEY_ID,
-  RAZORPAY_KEY_SECRET,
-  SMTP_FROM_NAME,
-  SMTP_FROM_EMAIL,
-  SMTP_PASS,
-  ADMIN_EMAIL,
-  PORT = 5000,
-  ALLOW_ORIGINS,
-} = process.env;
-
-// ---------- Middleware ----------
-app.use(express.json({ limit: "1mb" }));
+// ================== MIDDLEWARE ==================
+app.use(express.json());
+app.use(morgan("dev"));
 app.use(helmet());
-app.use(morgan("tiny"));
-
-// CORS (allow list)
-const allowList = (ALLOW_ORIGINS || "*")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
 app.use(
   cors({
-    origin: (origin, cb) => {
-      if (!origin || allowList.includes("*") || allowList.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"));
-    },
-    credentials: false,
+    origin: ALLOW_ORIGINS.split(","),
+    credentials: true,
   })
 );
 
-// ---------- MongoDB ----------
+// ================== DB CONNECT ==================
 mongoose
   .connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => {
-    console.error("❌ MongoDB connect error:", err);
-    process.exit(1);
-  });
+  .catch((err) => console.error("❌ MongoDB error:", err));
 
-// ---------- Schemas ----------
-const registrationSchema = new mongoose.Schema({
-  runType: { type: String, required: true },
-  name: String,
-  email: String,
-  phone: String,
-  age: Number,
-  gender: String,
-  city: String,
-  bloodGroup: String,
-  tshirtSize: String,
-  amount: Number, // in paise
-  paymentId: String,
-  orderId: String,
-  signature: String,
-  createdAt: { type: Date, default: Date.now },
-});
-const Registration = mongoose.model("Registration", registrationSchema);
+// ================== SCHEMA ==================
+const RegistrationSchema = new mongoose.Schema(
+  {
+    name: String,
+    email: String,
+    phone: String,
+    age: Number,
+    category: String,
+    price: Number,
+    paymentId: String,
+    orderId: String,
+    status: { type: String, default: "pending" },
+  },
+  { timestamps: true }
+);
 
-const pendingSchema = new mongoose.Schema({
-  runType: { type: String, required: true },
-  name: String,
-  email: String,
-  phone: String,
-  age: Number,
-  gender: String,
-  city: String,
-  bloodGroup: String,
-  tshirtSize: String,
-  amount: Number, // in paise
-  orderId: { type: String, index: true, unique: true },
-  key: String,
-  createdAt: { type: Date, default: Date.now, index: true },
-});
-const PendingOrder = mongoose.model("PendingOrder", pendingSchema);
+const Registration = mongoose.model("Registration", RegistrationSchema);
 
-// ---------- Razorpay ----------
+// ================== RAZORPAY ==================
 const razorpay = new Razorpay({
   key_id: RAZORPAY_KEY_ID,
   key_secret: RAZORPAY_KEY_SECRET,
 });
 
-// ---------- Nodemailer ----------
+// ================== EMAIL TRANSPORT ==================
 const transporter = nodemailer.createTransport({
   service: "gmail",
-  auth: { user: SMTP_FROM_EMAIL, pass: SMTP_PASS },
+  auth: {
+    user: SMTP_FROM_EMAIL,
+    pass: SMTP_PASS,
+  },
 });
 
-// ---------- Prices ----------
-const priceMappingRupees = { "3K": 250, "5K": 300, "10K": 350 };
+// ================== ROUTES ==================
 
-// ---------- Routes ----------
-app.get("/api/health", (_, res) => res.json({ ok: true, ts: Date.now() }));
+// Health check
+app.get("/", (req, res) => {
+  res.send("🚀 Tanuku Run backend is running!");
+});
 
-// Create order (saves a pending document)
-app.post("/api/create-order", async (req, res) => {
+// Create Razorpay order
+app.post("/api/order", async (req, res) => {
   try {
-    const { raceType, name, email, phone, age, gender, city, bloodGroup, tshirtSize } = req.body;
+    const { amount, name, email, phone, age, category } = req.body;
 
-    if (!raceType || !priceMappingRupees[raceType]) {
-      return res.status(400).json({ success: false, error: "Invalid raceType" });
-    }
-
-    const amountInPaise = priceMappingRupees[raceType] * 100;
-
-    const order = await razorpay.orders.create({
-      amount: amountInPaise,
+    const options = {
+      amount: amount * 100, // in paisa
       currency: "INR",
-      receipt: `rcpt_${Date.now()}`,
-      payment_capture: 1,
-    });
+      receipt: "receipt_" + Date.now(),
+    };
 
-    await new PendingOrder({
-      runType: raceType,
+    const order = await razorpay.orders.create(options);
+
+    const newReg = new Registration({
       name,
       email,
       phone,
       age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-      amount: amountInPaise,
+      category,
+      price: amount,
       orderId: order.id,
-      key: RAZORPAY_KEY_ID,
-    }).save();
-
-    res.json({
-      success: true,
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      key: RAZORPAY_KEY_ID,
+      status: "created",
     });
+    await newReg.save();
+
+    res.json({ orderId: order.id, key: RAZORPAY_KEY_ID });
   } catch (err) {
-    console.error("create-order error:", err);
-    // Handle duplicate key on orderId (rare)
-    if (err.code === 11000) {
-      return res.status(409).json({ success: false, error: "Duplicate order, please retry." });
-    }
-    res.status(500).json({ success: false, error: "Server error creating order" });
+    console.error(err);
+    res.status(500).json({ error: "Something went wrong" });
   }
 });
 
-// Resume order (optional helper)
-app.get("/api/resume-order/:orderId", async (req, res) => {
+// Verify payment
+app.post("/api/verify", async (req, res) => {
   try {
-    const pending = await PendingOrder.findOne({ orderId: req.params.orderId }).lean();
-    if (!pending) return res.status(404).json({ success: false, error: "Pending order not found" });
-    res.json({ success: true, data: pending });
-  } catch (err) {
-    console.error("resume-order error:", err);
-    res.status(500).json({ success: false, error: "Server error" });
-  }
-});
+    const { orderId, paymentId, signature } = req.body;
 
-// Verify payment + save registration + send email
-app.post("/api/register", async (req, res) => {
-  try {
-    const {
-      runType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-      paymentId,
-      orderId,
-      signature,
-    } = req.body;
-
-    // Validate basics
-    if (!paymentId || !orderId || !signature) {
-      return res.status(400).json({ success: false, error: "Missing payment details" });
-    }
-
-    // Fetch pending
-    const pending = await PendingOrder.findOne({ orderId });
-    if (!pending) return res.status(400).json({ success: false, error: "Pending order not found" });
-
-    // Verify Razorpay signature
-    const generatedSignature = crypto
+    const generatedSig = crypto
       .createHmac("sha256", RAZORPAY_KEY_SECRET)
-      .update(`${orderId}|${paymentId}`)
+      .update(orderId + "|" + paymentId)
       .digest("hex");
 
-    if (generatedSignature !== signature) {
-      return res.status(400).json({ success: false, error: "Invalid signature" });
-    }
+    if (generatedSig === signature) {
+      const reg = await Registration.findOneAndUpdate(
+        { orderId },
+        { paymentId, status: "paid" },
+        { new: true }
+      );
 
-    // Verify payment is captured
-    const payment = await razorpay.payments.fetch(paymentId).catch(() => null);
-    if (!payment || payment.status !== "captured") {
-      return res.status(400).json({ success: false, error: "Payment not captured" });
-    }
+      if (reg) {
+        // Send email confirmation
+        await transporter.sendMail({
+          from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_EMAIL}>`,
+          to: reg.email,
+          subject: "🎉 Registration Successful - Tanuku Road Run 2025",
+          html: `<h3>Hi ${reg.name},</h3><p>Thank you for registering for <b>Tanuku Road Run 2025</b> in category <b>${reg.category}</b>.</p><p>Your payment of ₹${reg.price} has been received.</p><p>We look forward to seeing you!</p>`,
+        });
 
-    // Save final registration
-    const reg = await new Registration({
-      runType: runType || pending.runType,
-      name: name || pending.name,
-      email: email || pending.email,
-      phone: phone || pending.phone,
-      age: age || pending.age,
-      gender: gender || pending.gender,
-      city: city || pending.city,
-      bloodGroup: bloodGroup || pending.bloodGroup,
-      tshirtSize: tshirtSize || pending.tshirtSize,
-      amount: pending.amount,
-      paymentId,
-      orderId,
-      signature,
-    }).save();
-
-    // Remove pending
-    await PendingOrder.deleteOne({ orderId });
-
-    // Send email (to runner, BCC admin)
-    const amountRupees = (pending.amount / 100).toFixed(0);
-    const html = `
-      <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6">
-        <h2>Thank you for registering, ${reg.name}!</h2>
-        <p>Your registration for <strong>${reg.runType}</strong> is confirmed.</p>
-        <p><strong>Amount Paid:</strong> ₹${amountRupees}</p>
-        <p><strong>Payment ID:</strong> ${paymentId}</p>
-        <p><strong>Order ID:</strong> ${orderId}</p>
-        <hr/>
-        <p><strong>Details</strong></p>
-        <ul>
-          <li>Name: ${reg.name}</li>
-          <li>Email: ${reg.email}</li>
-          <li>Phone: ${reg.phone}</li>
-          <li>Age/Gender: ${reg.age} / ${reg.gender}</li>
-          <li>City: ${reg.city}</li>
-          <li>Blood Group: ${reg.bloodGroup}</li>
-          <li>T-Shirt Size: ${reg.tshirtSize}</li>
-        </ul>
-        <p>See you at Tanuku Road Run 2025! 🏃‍♀️🏃‍♂️</p>
-      </div>
-    `;
-
-    transporter.sendMail(
-      {
-        from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_EMAIL}>`,
-        to: reg.email,
-        bcc: ADMIN_EMAIL || undefined, // remove BCC if you don't want admin copy
-        subject: `Registration Successful – ${reg.runType}`,
-        html,
-      },
-      (err, info) => {
-        if (err) console.error("Email send error:", err);
-        else console.log("Email sent:", info.response);
+        // Send email to Admin
+        await transporter.sendMail({
+          from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_EMAIL}>`,
+          to: ADMIN_EMAIL,
+          subject: `✅ New Registration - ${reg.name}`,
+          html: `<p><b>Name:</b> ${reg.name}<br><b>Email:</b> ${reg.email}<br><b>Phone:</b> ${reg.phone}<br><b>Category:</b> ${reg.category}<br><b>Amount:</b> ₹${reg.price}</p>`,
+        });
       }
-    );
 
-    res.json({ success: true, id: reg._id });
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ success: false, error: "Invalid signature" });
+    }
   } catch (err) {
-    console.error("register error:", err);
-    res.status(500).json({ success: false, error: "Server error" });
+    console.error(err);
+    res.status(500).json({ error: "Verification failed" });
   }
 });
 
-// Admin: list registrations (protect behind a secret/token in real use)
-app.get("/api/registrations", async (_, res) => {
+// Get all registrations (admin)
+app.get("/api/registrations", async (req, res) => {
   try {
-    const regs = await Registration.find().sort({ createdAt: -1 }).lean();
-    res.json({ success: true, data: regs });
+    const regs = await Registration.find().sort({ createdAt: -1 });
+    res.json(regs);
   } catch (err) {
-    console.error("registrations error:", err);
-    res.status(500).json({ success: false, error: "Server error" });
+    res.status(500).json({ error: "Could not fetch registrations" });
   }
 });
 
-// 404 handler
-app.use((req, res) => res.status(404).json({ success: false, error: "Not found" }));
-
-app.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
+// ================== START SERVER ==================
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
