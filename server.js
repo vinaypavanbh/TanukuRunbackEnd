@@ -21,15 +21,18 @@ mongoose
   });
 
 // ---------- Nodemailer (Gmail) ----------
+
+
 const transporter = nodemailer.createTransport({
-  host: "smtp-relay.sendinblue.com",
-  port: 587,               // or 465 for SSL
-  secure: false,           // true for port 465, false for 587
+  host: 'smtp-relay.brevo.com',
+  port: 587,
+  secure: false, // set to true if using port 465
   auth: {
-    user: "tanukuroadrun@gmail.com",
-    pass: "Password@1234",
+    user: '957dcc001@smtp-brevo.com', // your Brevo SMTP login
+    pass: 'cs7H2vEFGPKBA3wm',       // 🔒 paste your actual SMTP password here
   },
 });
+
 
 
 // ---------- Schemas ----------
