@@ -162,7 +162,7 @@ app.post("/api/register", async (req, res) => {
 
     // --- SEND EMAIL ---
     const mailOptions = {
-      from: '"Tanuku Road Run 2025" <957dcc001@smtp-brevo.com>',
+      from: '"Tanuku Road Run 2025" <tanukuroadrun@gmail.com>',
       to: email,
       subject: `Registration Successful - ${runType}`,
       html: `
@@ -171,7 +171,7 @@ app.post("/api/register", async (req, res) => {
         <p><strong>Amount Paid:</strong> ₹${pending.amount / 100}</p>
         <p>We look forward to seeing you at Tanuku Road Run 2025!</p>
         <br/>
-        <p>Regards,<br/>Tanuku Road Run Team</p>
+        <p>Regards,<br/>Tanuku Road Runner Team</p>
       `
     };
 
