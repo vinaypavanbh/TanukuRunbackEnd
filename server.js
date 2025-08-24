@@ -22,12 +22,15 @@ mongoose
 
 // ---------- Nodemailer (Gmail) ----------
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp-relay.sendinblue.com",
+  port: 587,               // or 465 for SSL
+  secure: false,           // true for port 465, false for 587
   auth: {
-    user: "youremail@gmail.com", // replace with your Gmail
-    pass: "your-app-password" // use Gmail App Password
+    user: "tanukuroadrun@gmail.com",
+    pass: "Password@1234",
   },
 });
+
 
 // ---------- Schemas ----------
 const registrationSchema = new mongoose.Schema({
