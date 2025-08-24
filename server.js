@@ -162,7 +162,7 @@ app.post("/api/register", async (req, res) => {
 
     // --- SEND EMAIL ---
     const mailOptions = {
-      from: '"Tanuku Road Run 2025" <youremail@gmail.com>',
+      from: '"Tanuku Road Run 2025" <957dcc001@smtp-brevo.com>',
       to: email,
       subject: `Registration Successful - ${runType}`,
       html: `
