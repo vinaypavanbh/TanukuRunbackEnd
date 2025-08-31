@@ -22,7 +22,6 @@ mongoose
 
 // ---------- Nodemailer (Gmail) ----------
 
-
 const transporter = nodemailer.createTransport({
   host: 'smtp-relay.brevo.com',
   port: 587,
@@ -35,7 +34,7 @@ const transporter = nodemailer.createTransport({
 
 
 
-// ---------- Schemas ----------
+// ---------- Schemas --------------
 const registrationSchema = new mongoose.Schema({
   runType: String,
   name: String,
@@ -83,7 +82,7 @@ const razorpay = new Razorpay({
 // ---------- Price mapping ----------
 const priceMappingRupees = { "3K": 250, "5K": 300, "10K": 350 };
 
-// ---------- Routes ----------
+// ---------- Routes ------------------------------------
 
 // Health check
 app.get("/api/health", (_, res) => res.json({ ok: true }));
