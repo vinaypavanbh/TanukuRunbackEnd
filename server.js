@@ -226,7 +226,7 @@ app.post("/api/register", async (req, res) => {
       await axios.post(
         INTERAKT_URL,
         {
-          from: "+918106146615", // your Interakt sender number
+          from: "+919629050142", // your Interakt sender number
           fullPhoneNumber: `+91${phone}`,
           type: "Template",
           template: {
@@ -240,7 +240,7 @@ app.post("/api/register", async (req, res) => {
         },
         {
           headers: {
-            Authorization: `Bearer ${INTERAKT_API_KEY}`,
+            Authorization: `Basic ${INTERAKT_API_KEY}`,
             "Content-Type": "application/json",
           },
         }
