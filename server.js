@@ -4,15 +4,13 @@ const cors = require("cors");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
-const axios = require("axios");        // ✅ NEW
 
 const app = express();
 app.use(express.json());
 app.use(cors({ origin: "*" }));
 
 // ---------- MongoDB ----------
-const MONGO_URI =
-  "mongodb+srv://krishnasastry99:J12rfhtgXDzyBj2B@cluster0.zownxzc.mongodb.net/tanuku_run?retryWrites=true&w=majority";
+const MONGO_URI = "mongodb+srv://krishnasastry99:J12rfhtgXDzyBj2B@cluster0.zownxzc.mongodb.net/tanuku_run?retryWrites=true&w=majority";
 
 mongoose
   .connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
@@ -22,18 +20,21 @@ mongoose
     process.exit(1);
   });
 
-// ---------- Nodemailer (Brevo) ----------
+// ---------- Nodemailer (Gmail) ----------
+
 const transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",
+  host: 'smtp-relay.brevo.com',
   port: 587,
-  secure: false,
+  secure: false, // set to true if using port 465
   auth: {
-    user: "957dcc001@smtp-brevo.com",
-    pass: "cs7H2vEFGPKBA3wm",
+    user: '957dcc001@smtp-brevo.com', // your Brevo SMTP login
+    pass: 'cs7H2vEFGPKBA3wm',       // 🔒 paste your actual SMTP password here
   },
 });
 
-// ---------- Schemas ----------
+
+
+// ---------- Schemas --------------
 const registrationSchema = new mongoose.Schema({
   runType: String,
   name: String,
@@ -78,32 +79,18 @@ const razorpay = new Razorpay({
   key_secret: RAZORPAY_KEY_SECRET,
 });
 
-// ---------- Interakt Config (WhatsApp) ----------
-const INTERAKT_API_KEY = "NVpWZzRKYzFuRzBuLS1sSjRPc1A3bzNjVEs4LXlnNk9OVjRWTkxDdGdpYzo="; // 🔒 set env variable in production
-const INTERAKT_URL = "https://api.interakt.ai/v1/public/message";
-
 // ---------- Price mapping ----------
 const priceMappingRupees = { "3K": 250, "5K": 300, "10K": 350 };
 
-// ---------- Routes ----------
+// ---------- Routes ------------------------------------
 
 // Health check
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-// Create order
+// Create order & save pending
 app.post("/api/create-order", async (req, res) => {
   try {
-    const {
-      raceType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-    } = req.body;
+    const { raceType, name, email, phone, age, gender, city, bloodGroup, tshirtSize } = req.body;
 
     if (!raceType || !priceMappingRupees[raceType]) {
       return res.status(400).json({ success: false, error: "Invalid raceType" });
@@ -120,14 +107,7 @@ app.post("/api/create-order", async (req, res) => {
 
     const pending = new PendingOrder({
       runType: raceType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
+      name, email, phone, age, gender, city, bloodGroup, tshirtSize,
       amount: amountInPaise,
       orderId: order.id,
       key: RAZORPAY_KEY_ID,
@@ -147,27 +127,13 @@ app.post("/api/create-order", async (req, res) => {
   }
 });
 
-// Complete registration / payment
+// Complete registration / payment with email
 app.post("/api/register", async (req, res) => {
   try {
-    const {
-      runType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-      paymentId,
-      orderId,
-      signature,
-    } = req.body;
+    const { runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize, paymentId, orderId, signature } = req.body;
 
     const pending = await PendingOrder.findOne({ orderId });
-    if (!pending)
-      return res.status(400).json({ success: false, error: "Pending order not found" });
+    if (!pending) return res.status(400).json({ success: false, error: "Pending order not found" });
 
     const generatedSignature = crypto
       .createHmac("sha256", RAZORPAY_KEY_SECRET)
@@ -183,27 +149,17 @@ app.post("/api/register", async (req, res) => {
       return res.status(400).json({ success: false, error: "Payment not captured." });
     }
 
-    // Save registration
+    // Save final registration
     const reg = new Registration({
-      runType,
-      name,
-      email,
-      phone,
-      age,
-      gender,
-      city,
-      bloodGroup,
-      tshirtSize,
-      amount: pending.amount,
-      paymentId,
-      orderId,
-      signature,
+      runType, name, email, phone, age, gender, city, bloodGroup, tshirtSize,
+      amount: pending.amount, paymentId, orderId, signature
     });
     await reg.save();
 
+    // Remove pending
     await PendingOrder.deleteOne({ orderId });
 
-    // --- Send Email ---
+    // --- SEND EMAIL ---
     const mailOptions = {
       from: '"Tanuku Road Run 2025" <tanukuroadrun@gmail.com>',
       to: email,
@@ -215,49 +171,23 @@ app.post("/api/register", async (req, res) => {
         <p>We look forward to seeing you at Tanuku Road Run 2025!</p>
         <br/>
         <p>Regards,<br/>Tanuku Road Runner Team</p>
-      `,
+      `
     };
-    transporter.sendMail(mailOptions, (err) => {
+
+    transporter.sendMail(mailOptions, (err, info) => {
       if (err) console.error("Email sending failed:", err);
+      else console.log("Email sent:", info.response);
     });
 
-    // --- ✅ Send WhatsApp template via Interakt ---
-    try {
-      await axios.post(
-        INTERAKT_URL,
-        {
-          from: "+919629050142", // your Interakt sender number
-          fullPhoneNumber: `+91${phone}`,
-          type: "Template",
-          template: {
-            name: "event_registration_confirmation_ue",
-            languageCode: "en",
-            bodyValues: [
-              "07 December 2025", // Event Date
-              "Tanuku, Andhra Pradesh", // Location
-            ],
-          },
-        },
-        {
-          headers: {
-            Authorization: `Basic ${INTERAKT_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log(`✅ WhatsApp message sent to ${phone}`);
-    } catch (waErr) {
-      console.error("❌ WhatsApp send error:", waErr.response?.data || waErr.message);
-    }
-
     res.json({ success: true, id: reg._id });
+
   } catch (err) {
     console.error("register error:", err);
     res.status(500).json({ success: false, error: "Server error" });
   }
 });
 
-// List registrations
+// List all registrations
 app.get("/api/registrations", async (_, res) => {
   try {
     const regs = await Registration.find().sort({ createdAt: -1 }).lean();
